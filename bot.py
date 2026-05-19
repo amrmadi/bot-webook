@@ -38,7 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 EMAIL, PHONE = range(1, 3)
-LOGIN_EMAIL, LOGIN_PASSWORD = range(3, 5)
+
 
 _seen_event_slugs = set()
 
@@ -518,83 +518,86 @@ async def booking_cancel(update: Update, context):
 
 async def webook_login_start(update: Update, context):
     query = update.callback_query
+    await query.answer()
     token = get_webook_token(query.from_user.id)
     if token and token.get("access_token"):
         await query.edit_message_text(
             "✅ أنت مسجل الدخول بالفعل!",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]]),
         )
-        return ConversationHandler.END
+        return
 
+    context.user_data["webook_login_step"] = "awaiting_email"
     await query.edit_message_text(
         "🔑 <b>تسجيل الدخول إلى WeBook</b>\n\n"
         "أرسل <b>البريد الإلكتروني</b> الخاص بحسابك في WeBook:\n\n"
         "لإلغاء أرسل /cancel",
         parse_mode=ParseMode.HTML,
     )
-    return LOGIN_EMAIL
 
 
-async def webook_login_receive_email(update: Update, context):
-    email = update.message.text.strip()
-    if "@" not in email or "." not in email:
+async def webook_handle_message(update: Update, context):
+    step = context.user_data.get("webook_login_step")
+    if not step:
+        return  # not in login flow, let other handlers process
+
+    text = update.message.text.strip()
+    user = update.effective_user
+
+    if text == "/cancel":
+        context.user_data.clear()
+        await update.message.reply_text("تم إلغاء تسجيل الدخول.")
+        return
+
+    if step == "awaiting_email":
+        if "@" not in text or "." not in text:
+            await update.message.reply_text(
+                "❌ البريد الإلكتروني غير صحيح.\nأرسل بريد إلكتروني صحيح.\n\nلإلغاء أرسل /cancel"
+            )
+            return
+
+        context.user_data["webook_email"] = text
+        context.user_data["webook_login_step"] = "awaiting_password"
         await update.message.reply_text(
-            "❌ البريد الإلكتروني غير صحيح.\n\nلإلغاء أرسل /cancel",
+            "✅ تم حفظ البريد!\n\nالآن أرسل <b>كلمة المرور</b> الخاصة بحسابك WeBook:\n\nلإلغاء أرسل /cancel",
             parse_mode=ParseMode.HTML,
         )
-        return LOGIN_EMAIL
 
-    context.user_data["webook_email"] = email
-    await update.message.reply_text(
-        "✅ تم حفظ البريد!\n\nالآن أرسل <b>كلمة المرور</b> الخاصة بحسابك WeBook:\n\nلإلغاء أرسل /cancel",
-        parse_mode=ParseMode.HTML,
-    )
-    return LOGIN_PASSWORD
+    elif step == "awaiting_password":
+        if not text:
+            await update.message.reply_text("❌ كلمة المرور لا يمكن أن تكون فارغة.\n\nلإلغاء أرسل /cancel")
+            return
 
+        email = context.user_data.get("webook_email", "")
+        set_pref(user.id, "webook_email", email)
+        set_pref(user.id, "webook_password", text)
 
-async def webook_login_receive_password(update: Update, context):
-    password = update.message.text.strip()
-    user = update.effective_user
-    email = context.user_data.get("webook_email", "")
+        msg = await update.message.reply_text("🔄 جاري تسجيل الدخول إلى WeBook...")
 
-    if not password:
-        await update.message.reply_text("❌ كلمة المرور لا يمكن أن تكون فارغة.\n\nلإلغاء أرسل /cancel")
-        return LOGIN_PASSWORD
+        result, err = wk.login(email, text)
+        if err:
+            await msg.edit_text(f"❌ فشل تسجيل الدخول:\n{err}")
+            context.user_data["webook_login_step"] = "awaiting_email"
+            context.user_data.pop("webook_email", None)
+            await update.message.reply_text(
+                "أرسل البريد الإلكتروني مرة أخرى:\n\nلإلغاء أرسل /cancel"
+            )
+            return
 
-    set_pref(user.id, "webook_email", email)
-    set_pref(user.id, "webook_password", password)
+        save_webook_token(
+            user.id,
+            result["access_token"],
+            result.get("refresh_token", ""),
+            result.get("api_user", ""),
+            result.get("guid", ""),
+        )
 
-    msg = await update.message.reply_text("🔄 جاري تسجيل الدخول إلى WeBook...")
-
-    result, err = wk.login(email, password)
-    if err:
-        await msg.edit_text(f"❌ فشل تسجيل الدخول:\n{err}")
-        return LOGIN_PASSWORD
-
-    save_webook_token(
-        user.id,
-        result["access_token"],
-        result.get("refresh_token", ""),
-        result.get("api_user", ""),
-        result.get("guid", ""),
-    )
-
-    await msg.edit_text(
-        "✅ <b>تم تسجيل الدخول بنجاح!</b>\n\n"
-        "يمكنك الآن حجز التذاكر مباشرة من البوت.",
-        parse_mode=ParseMode.HTML,
-    )
-    context.user_data.clear()
-    return ConversationHandler.END
-
-
-async def webook_login_cancel(update: Update, context):
-    if update.callback_query:
-        await update.callback_query.edit_message_text("تم إلغاء تسجيل الدخول.")
-    else:
-        await update.message.reply_text("تم إلغاء تسجيل الدخول.")
-    context.user_data.clear()
-    return ConversationHandler.END
+        context.user_data.clear()
+        await msg.edit_text(
+            "✅ <b>تم تسجيل الدخول بنجاح!</b>\n\n"
+            "يمكنك الآن حجز التذاكر مباشرة من البوت.",
+            parse_mode=ParseMode.HTML,
+        )
 
 
 async def webook_account_info(update: Update, context):
@@ -752,21 +755,8 @@ def build_application(post_init_fn=None):
     )
     app.add_handler(booking_conv)
 
-    webook_login_conv = ConversationHandler(
-        entry_points=[CallbackQueryHandler(webook_login_start, pattern="^webook_login$")],
-        states={
-            LOGIN_EMAIL: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, webook_login_receive_email),
-            ],
-            LOGIN_PASSWORD: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, webook_login_receive_password),
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancel", webook_login_cancel),
-        ],
-    )
-    app.add_handler(webook_login_conv)
+    # Handle login text flow (email/password)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, webook_handle_message), group=1)
 
     return app
 
