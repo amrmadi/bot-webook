@@ -527,6 +527,7 @@ async def webook_login_start(update: Update, context):
         )
         return
 
+    context.user_data.clear()
     context.user_data["webook_login_step"] = "awaiting_email"
     await query.edit_message_text(
         "🔑 <b>تسجيل الدخول إلى WeBook</b>\n\n"
@@ -539,7 +540,7 @@ async def webook_login_start(update: Update, context):
 async def webook_handle_message(update: Update, context):
     step = context.user_data.get("webook_login_step")
     if not step:
-        return  # not in login flow, let other handlers process
+        return
 
     text = update.message.text.strip()
     user = update.effective_user
@@ -568,36 +569,38 @@ async def webook_handle_message(update: Update, context):
             await update.message.reply_text("❌ كلمة المرور لا يمكن أن تكون فارغة.\n\nلإلغاء أرسل /cancel")
             return
 
-        email = context.user_data.get("webook_email", "")
-        set_pref(user.id, "webook_email", email)
-        set_pref(user.id, "webook_password", text)
+        try:
+            email = context.user_data.get("webook_email", "")
+            set_pref(user.id, "webook_email", email)
+            set_pref(user.id, "webook_password", text)
 
-        msg = await update.message.reply_text("🔄 جاري تسجيل الدخول إلى WeBook...")
+            await update.message.reply_text("🔄 جاري تسجيل الدخول إلى WeBook...")
 
-        result, err = wk.login(email, text)
-        if err:
-            await msg.edit_text(f"❌ فشل تسجيل الدخول:\n{err}")
-            context.user_data["webook_login_step"] = "awaiting_email"
-            context.user_data.pop("webook_email", None)
-            await update.message.reply_text(
-                "أرسل البريد الإلكتروني مرة أخرى:\n\nلإلغاء أرسل /cancel"
+            result, err = wk.login(email, text)
+            if err:
+                await update.message.reply_text(f"❌ فشل تسجيل الدخول:\n{err}")
+                context.user_data["webook_login_step"] = "awaiting_email"
+                context.user_data.pop("webook_email", None)
+                return
+
+            save_webook_token(
+                user.id,
+                result["access_token"],
+                result.get("refresh_token", ""),
+                result.get("api_user", ""),
+                result.get("guid", ""),
             )
-            return
 
-        save_webook_token(
-            user.id,
-            result["access_token"],
-            result.get("refresh_token", ""),
-            result.get("api_user", ""),
-            result.get("guid", ""),
-        )
-
-        context.user_data.clear()
-        await msg.edit_text(
-            "✅ <b>تم تسجيل الدخول بنجاح!</b>\n\n"
-            "يمكنك الآن حجز التذاكر مباشرة من البوت.",
-            parse_mode=ParseMode.HTML,
-        )
+            context.user_data.clear()
+            await update.message.reply_text(
+                "✅ <b>تم تسجيل الدخول بنجاح!</b>\n\n"
+                "يمكنك الآن حجز التذاكر مباشرة من البوت.",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as e:
+            logger.error(f"Login error: {e}", exc_info=True)
+            await update.message.reply_text(f"❌ حدث خطأ غير متوقع: {str(e)}")
+            context.user_data.pop("webook_login_step", None)
 
 
 async def webook_account_info(update: Update, context):
@@ -755,8 +758,7 @@ def build_application(post_init_fn=None):
     )
     app.add_handler(booking_conv)
 
-    # Handle login text flow (email/password)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, webook_handle_message), group=1)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, webook_handle_message))
 
     return app
 
