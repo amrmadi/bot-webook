@@ -45,7 +45,19 @@ def init_db():
             user_id INTEGER PRIMARY KEY,
             phone TEXT,
             email TEXT,
+            webook_email TEXT,
+            webook_password TEXT,
             notifications INTEGER DEFAULT 1,
+            updated_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS webook_auth_tokens (
+            user_id INTEGER PRIMARY KEY,
+            access_token TEXT NOT NULL,
+            refresh_token TEXT,
+            api_user TEXT,
+            guid TEXT,
             updated_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         );
@@ -148,28 +160,56 @@ def get_prefs(user_id):
         "user_id": user_id,
         "phone": None,
         "email": None,
+        "webook_email": None,
+        "webook_password": None,
         "notifications": 1,
     }
 
+
 def set_pref(user_id, key, value):
     prefs = get_prefs(user_id)
-    keys = {"phone", "email", "notifications"}
+    keys = {"phone", "email", "webook_email", "webook_password", "notifications"}
     if key in keys:
         prefs[key] = value
     conn = get_connection()
     conn.execute(
         """INSERT OR REPLACE INTO user_prefs
-           (user_id, phone, email, notifications, updated_at)
-           VALUES (?, ?, ?, ?, datetime('now'))""",
+           (user_id, phone, email, webook_email, webook_password, notifications, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, datetime('now'))""",
         (
             user_id,
             prefs.get("phone"),
             prefs.get("email"),
+            prefs.get("webook_email"),
+            prefs.get("webook_password"),
             prefs.get("notifications", 1),
         ),
     )
     conn.commit()
     conn.close()
+
+
+def save_webook_token(user_id, access_token, refresh_token="", api_user="", guid=""):
+    conn = get_connection()
+    conn.execute(
+        """INSERT OR REPLACE INTO webook_auth_tokens
+           (user_id, access_token, refresh_token, api_user, guid, updated_at)
+           VALUES (?, ?, ?, ?, ?, datetime('now'))""",
+        (user_id, access_token, refresh_token, api_user, guid),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_webook_token(user_id):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM webook_auth_tokens WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    conn.close()
+    if row:
+        return dict(row)
+    return None
 
 def mark_event_seen(event_slug):
     conn = get_connection()

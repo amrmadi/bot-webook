@@ -25,6 +25,8 @@ from database import (
     save_booking_request,
     get_prefs,
     set_pref,
+    save_webook_token,
+    get_webook_token,
     mark_event_seen,
     is_event_seen,
 )
@@ -36,6 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 EMAIL, PHONE = range(1, 3)
+LOGIN_EMAIL, LOGIN_PASSWORD = range(3, 5)
 
 _seen_event_slugs = set()
 
@@ -57,14 +60,22 @@ async def start(update: Update, context):
 
 
 async def show_main_menu(update: Update, context, edit=False):
+    uid = update.effective_user.id
+    webook_token = get_webook_token(uid)
+    logged_in = webook_token is not None and bool(webook_token.get("access_token"))
+
     keyboard = [
         [InlineKeyboardButton("📅 الفعاليات المتاحة", callback_data="events")],
         [InlineKeyboardButton("🏟️ الفرق الرياضية", callback_data="teams")],
         [InlineKeyboardButton("🔔 إشعاراتي", callback_data="my_notifications")],
-        [InlineKeyboardButton("🎫 حجز تذكرة", callback_data="booking")],
-        [InlineKeyboardButton("📋 بياناتي", callback_data="my_data")],
-        [InlineKeyboardButton("🔧 الدعم الفني", callback_data="support")],
     ]
+    if logged_in:
+        keyboard.append([InlineKeyboardButton("🎫 حجز تذكرة WeBook", callback_data="webook_booking")])
+        keyboard.append([InlineKeyboardButton("🔑 حساب WeBook (متصل ✅)", callback_data="webook_account")])
+    else:
+        keyboard.append([InlineKeyboardButton("🔑 تسجيل الدخول WeBook", callback_data="webook_login")])
+    keyboard.append([InlineKeyboardButton("📋 بياناتي", callback_data="my_data")])
+    keyboard.append([InlineKeyboardButton("🔧 الدعم الفني", callback_data="support")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     text = f"مرحباً {update.effective_user.first_name}! 👋\n🎟️ بوت WeBook - اختر من القائمة:"
     if edit and update.callback_query:
@@ -109,23 +120,39 @@ async def menu_callback(update: Update, context):
         await query.answer("✅ تم إلغاء الكل")
         await show_my_notifications(update, context)
     elif data == "back_main":
+        uid = query.from_user.id
+        webook_token = get_webook_token(uid)
+        logged_in = webook_token is not None and bool(webook_token.get("access_token"))
+        btns = [
+            [InlineKeyboardButton("📅 الفعاليات المتاحة", callback_data="events")],
+            [InlineKeyboardButton("🏟️ الفرق الرياضية", callback_data="teams")],
+            [InlineKeyboardButton("🔔 إشعاراتي", callback_data="my_notifications")],
+        ]
+        if logged_in:
+            btns.append([InlineKeyboardButton("🎫 حجز تذكرة WeBook", callback_data="webook_booking")])
+            btns.append([InlineKeyboardButton("🔑 حساب WeBook (متصل ✅)", callback_data="webook_account")])
+        else:
+            btns.append([InlineKeyboardButton("🔑 تسجيل الدخول WeBook", callback_data="webook_login")])
+        btns.append([InlineKeyboardButton("📋 بياناتي", callback_data="my_data")])
+        btns.append([InlineKeyboardButton("🔧 الدعم الفني", callback_data="support")])
         await query.edit_message_text(
             f"مرحباً {query.from_user.first_name}! 👋\n🎟️ بوت WeBook - اختر من القائمة:",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("📅 الفعاليات المتاحة", callback_data="events")],
-                [InlineKeyboardButton("🏟️ الفرق الرياضية", callback_data="teams")],
-                [InlineKeyboardButton("🔔 إشعاراتي", callback_data="my_notifications")],
-                [InlineKeyboardButton("🎫 حجز تذكرة", callback_data="booking")],
-                [InlineKeyboardButton("📋 بياناتي", callback_data="my_data")],
-                [InlineKeyboardButton("🔧 الدعم الفني", callback_data="support")],
-            ])
+            reply_markup=InlineKeyboardMarkup(btns)
         )
     elif data == "my_data":
         await show_my_data(update, context)
     elif data == "support":
         await show_support(update, context)
+    elif data == "webook_login":
+        await webook_login_start(update, context)
+    elif data == "webook_account":
+        await webook_account_info(update, context)
+    elif data == "webook_logout":
+        await webook_logout(update, context)
     elif data == "booking":
         await booking_start(update, context)
+    elif data == "webook_booking":
+        await webook_booking(update, context)
 
 
 async def show_events(update: Update, context):
@@ -355,13 +382,19 @@ async def show_my_data(update: Update, context):
     phone = prefs.get("phone") or "غير محدد"
     email = prefs.get("email") or "غير محدد"
     notif = "✅ مفعلة" if prefs.get("notifications", 1) else "❌ متوقفة"
+    webook_token = get_webook_token(query.from_user.id)
+    webook_status = "✅ متصل" if webook_token and webook_token.get("access_token") else "❌ غير متصل"
+    webook_email = prefs.get("webook_email") or ""
 
     text = (
         f"📋 بياناتي\n\n"
         f"📱 الهاتف: {phone}\n"
         f"📧 البريد الإلكتروني: {email}\n"
-        f"🔔 الإشعارات: {notif}"
+        f"🔔 الإشعارات: {notif}\n"
+        f"🔑 WeBook: {webook_status}\n"
     )
+    if webook_email:
+        text += f"📧 حساب WeBook: {webook_email}\n"
     await query.edit_message_text(
         text,
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]]),
@@ -483,6 +516,139 @@ async def booking_cancel(update: Update, context):
     return ConversationHandler.END
 
 
+async def webook_login_start(update: Update, context):
+    query = update.callback_query
+    token = get_webook_token(query.from_user.id)
+    if token and token.get("access_token"):
+        await query.edit_message_text(
+            "✅ أنت مسجل الدخول بالفعل!",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="back_main")]]),
+        )
+        return ConversationHandler.END
+
+    await query.edit_message_text(
+        "🔑 <b>تسجيل الدخول إلى WeBook</b>\n\n"
+        "أرسل <b>البريد الإلكتروني</b> الخاص بحسابك في WeBook:\n\n"
+        "لإلغاء أرسل /cancel",
+        parse_mode=ParseMode.HTML,
+    )
+    return LOGIN_EMAIL
+
+
+async def webook_login_receive_email(update: Update, context):
+    email = update.message.text.strip()
+    if "@" not in email or "." not in email:
+        await update.message.reply_text(
+            "❌ البريد الإلكتروني غير صحيح.\n\nلإلغاء أرسل /cancel",
+            parse_mode=ParseMode.HTML,
+        )
+        return LOGIN_EMAIL
+
+    context.user_data["webook_email"] = email
+    await update.message.reply_text(
+        "✅ تم حفظ البريد!\n\nالآن أرسل <b>كلمة المرور</b> الخاصة بحسابك WeBook:\n\nلإلغاء أرسل /cancel",
+        parse_mode=ParseMode.HTML,
+    )
+    return LOGIN_PASSWORD
+
+
+async def webook_login_receive_password(update: Update, context):
+    password = update.message.text.strip()
+    user = update.effective_user
+    email = context.user_data.get("webook_email", "")
+
+    if not password:
+        await update.message.reply_text("❌ كلمة المرور لا يمكن أن تكون فارغة.\n\nلإلغاء أرسل /cancel")
+        return LOGIN_PASSWORD
+
+    set_pref(user.id, "webook_email", email)
+    set_pref(user.id, "webook_password", password)
+
+    msg = await update.message.reply_text("🔄 جاري تسجيل الدخول إلى WeBook...")
+
+    result, err = wk.login(email, password)
+    if err:
+        await msg.edit_text(f"❌ فشل تسجيل الدخول:\n{err}")
+        return LOGIN_PASSWORD
+
+    save_webook_token(
+        user.id,
+        result["access_token"],
+        result.get("refresh_token", ""),
+        result.get("api_user", ""),
+        result.get("guid", ""),
+    )
+
+    await msg.edit_text(
+        "✅ <b>تم تسجيل الدخول بنجاح!</b>\n\n"
+        "يمكنك الآن حجز التذاكر مباشرة من البوت.",
+        parse_mode=ParseMode.HTML,
+    )
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def webook_login_cancel(update: Update, context):
+    if update.callback_query:
+        await update.callback_query.edit_message_text("تم إلغاء تسجيل الدخول.")
+    else:
+        await update.message.reply_text("تم إلغاء تسجيل الدخول.")
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def webook_account_info(update: Update, context):
+    query = update.callback_query
+    token = get_webook_token(query.from_user.id)
+    if not token or not token.get("access_token"):
+        await query.edit_message_text(
+            "❌ غير مسجل الدخول.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔑 تسجيل الدخول", callback_data="webook_login")]]),
+        )
+        return
+
+    text = (
+        f"🔑 <b>حساب WeBook</b>\n\n"
+        f"✅ متصل\n"
+        f"🆔 المستخدم: {token.get('api_user', 'N/A')}\n"
+    )
+    keyboard = [
+        [InlineKeyboardButton("🚪 تسجيل الخروج", callback_data="webook_logout")],
+        [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")],
+    ]
+    await query.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=InlineKeyboardMarkup(keyboard))
+
+
+async def webook_logout(update: Update, context):
+    query = update.callback_query
+    save_webook_token(query.from_user.id, "")
+    set_pref(query.from_user.id, "webook_password", None)
+    await query.answer("✅ تم تسجيل الخروج")
+    await start(update, context)
+
+
+async def webook_booking(update: Update, context):
+    query = update.callback_query
+    token = get_webook_token(query.from_user.id)
+    if not token or not token.get("access_token"):
+        await query.edit_message_text(
+            "❌ يجب تسجيل الدخول أولاً.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔑 تسجيل الدخول", callback_data="webook_login")]]),
+        )
+        return
+
+    await query.edit_message_text(
+        "🎫 <b>حجز تذكرة عبر WeBook</b>\n\n"
+        "تصفح الفعاليات واختر الفعالية التي تريد حجز تذكرة لها.\n"
+        "عند فتح تفاصيل الفعالية، سيظهر لك خيار الحجز.",
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📅 عرض الفعاليات", callback_data="events")],
+            [InlineKeyboardButton("🔙 رجوع", callback_data="back_main")],
+        ]),
+    )
+
+
 async def check_new_events(context):
     try:
         orgs, _ = wk.list_organizations()
@@ -585,6 +751,22 @@ def build_application(post_init_fn=None):
         ],
     )
     app.add_handler(booking_conv)
+
+    webook_login_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(webook_login_start, pattern="^webook_login$")],
+        states={
+            LOGIN_EMAIL: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, webook_login_receive_email),
+            ],
+            LOGIN_PASSWORD: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, webook_login_receive_password),
+            ],
+        },
+        fallbacks=[
+            CommandHandler("cancel", webook_login_cancel),
+        ],
+    )
+    app.add_handler(webook_login_conv)
 
     return app
 

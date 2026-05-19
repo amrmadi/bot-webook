@@ -188,3 +188,36 @@ def get_team_events(team_id):
             pass
 
     return _fallback_events("spl"), None
+
+
+def login(fan_id, password):
+    if not HAS_API_TOKEN:
+        return None, "مطلوب Webook Device Token أولاً. راسل api-support@webook.com"
+
+    url = f"{WEBOOK_API_BASE}/register-login"
+    payload = {"Username": fan_id, "Password": password}
+    try:
+        r = req.post(url, json=payload, headers=_auth_headers(), timeout=20)
+        if r.status_code == 200:
+            data = safe_json(r)
+            token = data.get("access_token") or data.get("token", "")
+            refresh = data.get("refresh_token", "")
+            api_user = data.get("fanId", data.get("user", {}).get("id", ""))
+            guid = data.get("guid", "")
+            if token:
+                return {
+                    "access_token": token,
+                    "refresh_token": refresh,
+                    "api_user": api_user,
+                    "guid": guid,
+                }, None
+            return None, "استجابة غير متوقعة"
+        elif r.status_code == 401:
+            return None, "البريد الإلكتروني أو كلمة السر غير صحيحة"
+        elif r.status_code == 429:
+            return None, "تم حظر الطلب مؤقتاً (كثرة المحاولات)"
+        else:
+            return None, f"خطأ في الخادم: {r.status_code}"
+    except Exception as e:
+        logger.error(f"login Error: {e}")
+        return None, str(e)
