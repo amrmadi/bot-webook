@@ -322,7 +322,7 @@ async def show_team_events(update: Update, context, team_id):
 
     if not events:
         await query.edit_message_text(
-            "لا توجد مباريات قادمة لهذا الفريق.",
+            "غير متاح حالياً",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 رجوع", callback_data="teams")]]),
         )
         return

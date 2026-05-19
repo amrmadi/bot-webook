@@ -187,7 +187,15 @@ def get_team_events(team_id):
         except Exception:
             pass
 
-    return _fallback_events("spl"), None
+    team_events_map = {
+        "0": _fallback_events("spl")[0:1],
+        "1": _fallback_events("spl")[0:1],
+        "2": _fallback_events("spl")[1:2],
+        "3": _fallback_events("spl")[1:2],
+        "4": _fallback_events("spl")[2:3],
+        "5": _fallback_events("spl")[2:3],
+    }
+    return team_events_map.get(team_id, []), None
 
 
 def login(fan_id, password):
