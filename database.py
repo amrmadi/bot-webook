@@ -67,6 +67,11 @@ def init_db():
             event_slug TEXT NOT NULL UNIQUE,
             first_seen TEXT DEFAULT (datetime('now'))
         );
+
+        CREATE TABLE IF NOT EXISTS bot_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
     """)
     conn.commit()
     conn.close()
@@ -227,3 +232,24 @@ def is_event_seen(event_slug):
     ).fetchone()
     conn.close()
     return row is not None
+
+
+def save_config(key, value):
+    conn = get_connection()
+    conn.execute(
+        "INSERT OR REPLACE INTO bot_config (key, value) VALUES (?, ?)",
+        (key, str(value)),
+    )
+    conn.commit()
+    conn.close()
+
+
+def load_config(key, default=None):
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT value FROM bot_config WHERE key = ?", (key,)
+    ).fetchone()
+    conn.close()
+    if row:
+        return row["value"]
+    return default

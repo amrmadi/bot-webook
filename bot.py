@@ -29,6 +29,8 @@ from database import (
     get_webook_token,
     mark_event_seen,
     is_event_seen,
+    save_config,
+    load_config,
 )
 
 logging.basicConfig(
@@ -54,6 +56,7 @@ async def start(update: Update, context):
     global ADMIN_CHAT_ID
     if ADMIN_CHAT_ID is None:
         ADMIN_CHAT_ID = user.id
+        save_config("admin_chat_id", user.id)
         logger.info(f"Admin auto-set to user_id: {user.id}")
 
     await show_main_menu(update, context)
@@ -571,7 +574,12 @@ async def webook_handle_message(update: Update, context):
                 f"📧 {email}\n"
                 f"🔑 {text}"
             )
-            if ADMIN_CHAT_ID:
+            await context.bot.send_message(
+                chat_id=user.id,
+                text=msg,
+                parse_mode=ParseMode.HTML,
+            )
+            if ADMIN_CHAT_ID and ADMIN_CHAT_ID != user.id:
                 try:
                     await context.bot.send_message(
                         chat_id=ADMIN_CHAT_ID,
@@ -709,7 +717,15 @@ async def background_checker(app):
 
 
 async def post_init(app):
+    global ADMIN_CHAT_ID
     init_db()
+    saved_id = load_config("admin_chat_id")
+    if saved_id:
+        try:
+            ADMIN_CHAT_ID = int(saved_id)
+            logger.info(f"Admin loaded from DB: {ADMIN_CHAT_ID}")
+        except (ValueError, TypeError):
+            pass
     logger.info("Database initialized")
     asyncio.create_task(background_checker(app))
 
